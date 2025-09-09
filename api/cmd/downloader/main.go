@@ -97,6 +97,18 @@ func main() {
 				Usage:   "number of parallel downloads",
 				EnvVars: []string{"SHUTTERBASE_PARALLELISM"},
 			},
+			&cli.IntFlag{
+				Name:    "retry-count",
+				Usage:   "Number of times to retry a failed download",
+				Value:   3,
+				EnvVars: []string{"SHUTTERBASE_RETRY_COUNT"},
+			},
+			&cli.IntFlag{
+				Name:    "retry-wait",
+				Usage:   "Seconds to wait between retries",
+				Value:   5,
+				EnvVars: []string{"SHUTTERBASE_RETRY_WAIT"},
+			},
 		},
 		Commands: []*cli.Command{
 			{
@@ -310,7 +322,7 @@ func download(c *cli.Context, properties DownloadProperties) error {
 
 				log.Debug().Msgf("Downloading image '%s'", image.ComputedFileName)
 				incrementBar()
-				err := downloadFile(c, apiClient, &image, filepath.Join(outputDir, getFileName(image.ComputedFileName)))
+				err := downloadFileWithRetry(c, apiClient, &image, filepath.Join(outputDir, getFileName(image.ComputedFileName)))
 				if err != nil {
 					log.Error().Err(err).Msgf("Failed to download image '%s'", image.ComputedFileName)
 					downloadResults <- DownloadResult{Status: DownloadStatusError, Image: image, Error: err}
@@ -397,6 +409,35 @@ func downloadFile(c *cli.Context, client *client.Client, image *client.Image, ou
 		return err
 	}
 	return nil
+}
+
+func downloadFileWithRetry(c *cli.Context, client *client.Client, image *client.Image, outputFile string) error {
+	retries := c.Int("retry-count")
+	wait := time.Duration(c.Int("retry-wait")) * time.Second
+
+	var err error
+	for attempt := 1; attempt <= retries; attempt++ {
+		err = downloadFile(c, client, image, outputFile)
+		if err == nil {
+			return nil
+		}
+
+		// cleanup: remove partial file if it exists
+		if _, statErr := os.Stat(outputFile); statErr == nil {
+			_ = os.Remove(outputFile)
+			log.Debug().Msgf("Removed partially downloaded file '%s'", outputFile)
+		}
+
+		if attempt < retries {
+			log.Warn().Err(err).Msgf(
+				"Download failed for '%s' (attempt %d/%d). Retrying in %s...",
+				image.ComputedFileName, attempt, retries, wait,
+			)
+			time.Sleep(wait)
+		}
+	}
+
+	return fmt.Errorf("failed to download '%s' after %d attempts: %w", image.ComputedFileName, retries, err)
 }
 
 func initLogger(c *cli.Context) error {
