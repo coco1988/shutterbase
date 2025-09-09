@@ -292,7 +292,14 @@ func download(c *cli.Context, properties DownloadProperties) error {
 		Error  error
 	}
 
-	bar := progressbar.Default(int64(len(filteredImages)))
+	//bar := progressbar.Default(int64(len(filteredImages)))
+	bar := progressbar.NewOptions(int(len(filteredImages)),
+		progressbar.OptionSetWriter(os.Stdout), // bar goes to stdout
+		progressbar.OptionShowCount(),          // show count
+		progressbar.OptionShowIts(),            // iterations/s
+		progressbar.OptionSetWidth(69),         // nicer width
+	)
+
 	lock := sync.Mutex{}
 	incrementBar := func() {
 		lock.Lock()
@@ -428,11 +435,12 @@ func downloadFileWithRetry(c *cli.Context, client *client.Client, image *client.
 			log.Debug().Msgf("Removed partially downloaded file '%s'", outputFile)
 		}
 
+		// Log error + retry as two separate entries
+		log.Error().Err(err).Msgf("Download failed for '%s' (attempt %d/%d)",
+			image.ComputedFileName, attempt, retries)
+
 		if attempt < retries {
-			log.Warn().Err(err).Msgf(
-				"Download failed for '%s' (attempt %d/%d). Retrying in %s...",
-				image.ComputedFileName, attempt, retries, wait,
-			)
+			log.Warn().Msgf("Retrying in %s...", wait)
 			time.Sleep(wait)
 		}
 	}
@@ -455,7 +463,11 @@ func initLogger(c *cli.Context) error {
 
 func setLogOutput() {
 	zerolog.TimeFieldFormat = time.RFC3339Nano
-	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: "2006-01-02T15:04:05.000Z"})
+	// Write logs to stderr, progressbar uses stdout
+	log.Logger = log.Output(zerolog.ConsoleWriter{
+		Out:        os.Stderr,
+		TimeFormat: "2006-01-02T15:04:05.000Z",
+	})
 }
 
 func applyLogLevel(logLevel string) {
